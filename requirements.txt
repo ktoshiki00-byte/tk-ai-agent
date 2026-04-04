@@ -3,6 +3,3 @@ line-bot-sdk
 anthropic
 gunicorn
 python-dotenv
-requests
-gspread
-google-auth
