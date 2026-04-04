@@ -4,3 +4,4 @@ anthropic
 gunicorn
 python-dotenv
 requests
+aiohttp==3.9.5
