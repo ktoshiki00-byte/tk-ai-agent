@@ -1,5 +1,6 @@
-flask>=3.0.0
-anthropic>=0.25.0
-line-bot-sdk>=3.0.0
-python-dotenv>=1.0.0
-gunicorn>=21.0.0
+flask
+line-bot-sdk==2.4.3
+anthropic
+gunicorn
+python-dotenv
+requests
