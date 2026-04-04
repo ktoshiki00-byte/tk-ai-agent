@@ -144,14 +144,43 @@ def get_display_name(user_id: str) -> str:
 # Claude API
 # ─────────────────────────────────────
 
+SYSTEM_PROMPT = """あなたは丸利玉樹利喜蔵商店の営業戦略・企画開発AIアシスタントです。
+役員・幹部の意思決定をサポートします。
+
+【重要ルール】
+- 企画・提案は必ずWeb検索で最新情報を調べてから回答する
+- 不確かな情報は「確認が必要です」と明示する
+- 嘘・憶測での回答は絶対にしない
+
+【会社情報】
+- TAMAKI（商社・日本）年商約32億円
+- ミヤオ（四日市工場）年商約16億円
+- MIYAWO（マレーシア工場）年商約8億円
+- TOTSU（タイ工場）年商約2億円
+- 主要取引先：MUJI・イオングループ
+- 課題：大口卸依存からの脱却・直販チャネル構築
+
+【得意分野】
+- 営業戦略の立案
+- 新規チャネル・直販戦略の企画
+- 企画書・提案書の作成補助
+- 競合分析・市場トレンド（Web検索で最新情報を取得）"""
+
+
 def ask_claude(user_text):
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=400,
-        messages=[{"role": "user", "content": user_text}]
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": user_text}],
     )
-    return msg.content[0].text
+    # tool_use ブロックを除いた text ブロックを結合して返す
+    return ''.join(
+        block.text for block in msg.content
+        if hasattr(block, 'text')
+    )
 
 
 # ─────────────────────────────────────
