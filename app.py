@@ -3,7 +3,7 @@ import logging
 
 import anthropic
 from dotenv import load_dotenv
-from flask import Flask, request, abort
+from flask import Flask, jsonify, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
@@ -137,6 +137,25 @@ def handle_message(event):
         reply = '少し待ってからもう一度お試しください。'
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+
+
+@app.route("/morning_report", methods=["GET", "POST"])
+def morning_report():
+    """朝のメッセージをプッシュ送信するエンドポイント（cronから呼び出される）"""
+    logger.info('朝の挨拶送信開始')
+    target_ids = [uid.strip() for uid in os.environ.get("TARGET_USER_IDS", "").split(",") if uid.strip()]
+    if not target_ids:
+        logger.warning('TARGET_USER_IDS が設定されていません')
+        return jsonify({'status': 'skipped', 'message': 'TARGET_USER_IDS が設定されていません'}), 200
+
+    for uid in target_ids:
+        try:
+            line_bot_api.push_message(uid, TextSendMessage(text='おはようございます！本日もよろしくお願いします。'))
+            logger.info(f'送信完了: {uid}')
+        except Exception as e:
+            logger.error(f'送信失敗 ({uid}): {e}')
+
+    return jsonify({'status': 'ok', 'message': '朝の挨拶を送信しました'})
 
 
 if __name__ == "__main__":
