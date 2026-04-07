@@ -143,10 +143,11 @@ def handle_message(event):
 def morning_report():
     """朝のメッセージをプッシュ送信するエンドポイント（cronから呼び出される）"""
     logger.info('朝の挨拶送信開始')
-    target_ids = [uid.strip() for uid in os.environ.get("TARGET_USER_IDS", "").split(",") if uid.strip()]
-    if not target_ids:
-        logger.warning('TARGET_USER_IDS が設定されていません')
-        return jsonify({'status': 'skipped', 'message': 'TARGET_USER_IDS が設定されていません'}), 200
+    line_user_id = os.environ.get("LINE_USER_ID", "").strip()
+    if not line_user_id:
+        logger.warning('LINE_USER_ID が設定されていません')
+        return jsonify({'status': 'skipped', 'message': 'LINE_USER_ID が設定されていません'}), 200
+    target_ids = [line_user_id]
 
     for uid in target_ids:
         try:
