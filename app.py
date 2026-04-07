@@ -102,7 +102,7 @@ def ask_claude(user_id: str, user_text: str) -> str:
 
 
 # ─────────────────────────────────────
-# PDF生成 / Google Drive
+# PDF生成 / 一時ホスティング
 # ─────────────────────────────────────
 
 def generate_pdf_content(topic: str) -> str:
@@ -135,8 +135,8 @@ def _wrap_lines(text: str, max_chars: int = 42) -> list:
     return result
 
 
-def create_pdf(title: str, content: str) -> str:
-    """reportlabで日本語PDFを作成し一時ファイルパスを返す"""
+def create_pdf(title: str, content: str, filename: str) -> str:
+    """reportlabで日本語PDFを作成し /tmp に保存してパスを返す"""
     from reportlab.pdfgen import canvas
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -144,11 +144,9 @@ def create_pdf(title: str, content: str) -> str:
 
     pdfmetrics.registerFont(UnicodeCIDFont('HeiseiKakuGo-W5'))
 
-    tmp = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
-    tmp_path = tmp.name
-    tmp.close()
+    pdf_path = os.path.join('/tmp', filename)
 
-    c = canvas.Canvas(tmp_path, pagesize=A4)
+    c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
     margin = 50
 
@@ -171,56 +169,17 @@ def create_pdf(title: str, content: str) -> str:
         y -= line_height
 
     c.save()
-    return tmp_path
+    return pdf_path
 
 
-def upload_to_drive(file_path: str, filename: str) -> str:
-    """Google DriveにPDFをアップロードし共有リンクを返す"""
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-
-    creds_json = os.environ.get('GOOGLE_CREDENTIALS', '')
-    if not creds_json:
-        raise ValueError('GOOGLE_CREDENTIALS が設定されていません')
-
-    creds_info = json.loads(creds_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        creds_info,
-        scopes=['https://www.googleapis.com/auth/drive.file'],
-    )
-    service = build('drive', 'v3', credentials=credentials)
-
-    file_metadata = {'name': filename, 'parents': ['1LL94DCzWnvI-6L6k_3AcansFB1MnKZhz']}
-    media = MediaFileUpload(file_path, mimetype='application/pdf')
-    uploaded = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id',
-        supportsAllDrives=True,
-        supportsTeamDrives=True,
-    ).execute()
-
-    file_id = uploaded.get('id')
-    service.permissions().create(
-        fileId=file_id,
-        body={'type': 'anyone', 'role': 'reader'},
-    ).execute()
-
-    return f'https://drive.google.com/file/d/{file_id}/view'
-
-
-def handle_pdf_creation(topic: str) -> str:
+def handle_pdf_creation(topic: str, base_url: str) -> str:
     """PDF作成フロー全体を実行してLINEへ返す文字列を返す"""
     try:
         logger.info(f'PDF作成開始: {topic}')
         content  = generate_pdf_content(topic)
         filename = f'{topic}.pdf'
-        pdf_path = create_pdf(topic, content)
-        try:
-            link = upload_to_drive(pdf_path, filename)
-        finally:
-            os.unlink(pdf_path)
+        create_pdf(topic, content, filename)
+        link = f'{base_url.rstrip("/")}/pdf/{filename}'
         logger.info(f'PDF作成完了: {link}')
         return f'「{topic}」のPDFを作成しました！\n\n{link}'
     except Exception as e:
@@ -235,6 +194,13 @@ def handle_pdf_creation(topic: str) -> str:
 @app.route("/")
 def index():
     return "tk-ai-agent 稼働中"
+
+
+@app.route("/pdf/<path:filename>")
+def serve_pdf(filename):
+    """一時ホスティングしたPDFを配信する"""
+    from flask import send_from_directory
+    return send_from_directory('/tmp', filename, mimetype='application/pdf')
 
 
 @app.route("/callback", methods=["POST"])
@@ -262,8 +228,9 @@ def handle_message(event):
         return
 
     if text.startswith(PDF_PREFIX):
-        topic = text[len(PDF_PREFIX):].strip()
-        reply = handle_pdf_creation(topic)
+        topic    = text[len(PDF_PREFIX):].strip()
+        base_url = os.environ.get('BASE_URL', request.host_url)
+        reply    = handle_pdf_creation(topic, base_url)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
