@@ -191,7 +191,7 @@ def upload_to_drive(file_path: str, filename: str) -> str:
     )
     service = build('drive', 'v3', credentials=credentials)
 
-    file_metadata = {'name': filename}
+    file_metadata = {'name': filename, 'parents': ['1LL94DCzWnvI-6L6k_3AcansFB1MnKZhz']}
     media = MediaFileUpload(file_path, mimetype='application/pdf')
     uploaded = service.files().create(
         body=file_metadata,
