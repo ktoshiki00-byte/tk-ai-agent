@@ -3,3 +3,6 @@ line-bot-sdk
 anthropic
 gunicorn
 python-dotenv
+reportlab
+google-api-python-client
+google-auth
