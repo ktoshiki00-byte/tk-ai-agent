@@ -197,6 +197,8 @@ def upload_to_drive(file_path: str, filename: str) -> str:
         body=file_metadata,
         media_body=media,
         fields='id',
+        supportsAllDrives=True,
+        supportsTeamDrives=True,
     ).execute()
 
     file_id = uploaded.get('id')
