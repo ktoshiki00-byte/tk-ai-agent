@@ -2,7 +2,12 @@ import io
 import json
 import os
 import logging
+import re
 import tempfile
+import threading
+import time
+from collections import deque
+from datetime import datetime, timedelta, timezone
 
 import anthropic
 from dotenv import load_dotenv
@@ -15,6 +20,41 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────
+# 状態確認（/status）用の記録
+# ※ メモリ上の記録なので、Renderの再起動・スリープ復帰でリセットされる
+# ─────────────────────────────────────
+
+JST = timezone(timedelta(hours=9))
+STARTED_AT = datetime.now(JST)
+
+_status_lock = threading.Lock()
+_error_times: deque = deque(maxlen=1000)   # ERRORログの発生時刻
+_last_error = {"at": None, "message": None}
+_last_morning_report = {"at": None, "result": None}
+_last_line_message_at = None
+
+
+class _ErrorCounter(logging.Handler):
+    """ERROR以上のログを数えるだけのハンドラ（内容は先頭120字だけ保持）"""
+
+    def emit(self, record):
+        now = datetime.now(JST)
+        with _status_lock:
+            _error_times.append(now)
+            _last_error["at"] = now
+            # LINEユーザーID（U+32桁）は伏せる
+            msg = re.sub(r"U[0-9a-f]{32}", "U***", record.getMessage())
+            _last_error["message"] = msg[:120]
+
+
+_error_counter = _ErrorCounter(level=logging.ERROR)
+logging.getLogger().addHandler(_error_counter)
+
+
+def _iso(dt):
+    return dt.isoformat(timespec="seconds") if dt else None
 
 app = Flask(__name__)
 
@@ -216,6 +256,9 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    global _last_line_message_at
+    with _status_lock:
+        _last_line_message_at = datetime.now(JST)
     user_id = event.source.user_id
     text    = event.message.text.strip()
 
@@ -253,14 +296,95 @@ def morning_report():
         return jsonify({'status': 'skipped', 'message': 'LINE_USER_ID が設定されていません'}), 200
     target_ids = [line_user_id]
 
+    failed = 0
     for uid in target_ids:
         try:
             line_bot_api.push_message(uid, TextSendMessage(text='おはようございます！本日もよろしくお願いします。'))
             logger.info(f'送信完了: {uid}')
         except Exception as e:
+            failed += 1
             logger.error(f'送信失敗 ({uid}): {e}')
 
+    with _status_lock:
+        _last_morning_report["at"] = datetime.now(JST)
+        _last_morning_report["result"] = "ok" if failed == 0 else f"failed {failed}/{len(target_ids)}"
+
     return jsonify({'status': 'ok', 'message': '朝の挨拶を送信しました'})
+
+
+# ─────────────────────────────────────
+# 状態確認ページ
+# 点検エージェントがログインなしで読むためのページ。
+# 個人情報・会話内容・トークン値は出さない。
+# ─────────────────────────────────────
+
+_line_check_cache = {"at": 0.0, "result": None}
+
+
+def _check_line_token() -> str:
+    """LINEのアクセストークンが有効か確認（10分キャッシュ）"""
+    now = time.time()
+    if _line_check_cache["result"] and now - _line_check_cache["at"] < 600:
+        return _line_check_cache["result"]
+    try:
+        line_bot_api.get_bot_info()
+        result = "ok"
+    except Exception as e:
+        result = f"error: {type(e).__name__}"
+    _line_check_cache.update(at=now, result=result)
+    return result
+
+
+@app.route("/status")
+def status():
+    now = datetime.now(JST)
+    since = now - timedelta(hours=24)
+    with _status_lock:
+        errors_24h = sum(1 for t in _error_times if t >= since)
+        last_error = dict(_last_error)
+        last_mr = dict(_last_morning_report)
+        last_msg = _last_line_message_at
+
+    line_token = _check_line_token()
+    config = {
+        "ANTHROPIC_API_KEY": bool(ANTHROPIC_API_KEY),
+        "LINE_CHANNEL_ACCESS_TOKEN": bool(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")),
+        "LINE_CHANNEL_SECRET": bool(os.environ.get("LINE_CHANNEL_SECRET")),
+        "LINE_USER_ID": bool(os.environ.get("LINE_USER_ID", "").strip()),
+    }
+
+    problems = []
+    warnings = []
+    if line_token != "ok":
+        problems.append("LINEトークンが無効、またはLINEに接続できない")
+    missing = [k for k, v in config.items() if not v]
+    if missing:
+        problems.append("環境変数が未設定: " + ", ".join(missing))
+    if errors_24h:
+        warnings.append(f"直近24時間のエラーログ {errors_24h} 件")
+    if last_mr["result"] and last_mr["result"] != "ok":
+        problems.append(f"朝レポートの送信失敗 ({last_mr['result']})")
+
+    overall = "異常" if problems else ("注意" if warnings else "正常")
+
+    return jsonify({
+        "app": "tk-ai-agent",
+        "overall": overall,
+        "problems": problems,
+        "warnings": warnings,
+        "checked_at": _iso(now),
+        "started_at": _iso(STARTED_AT),
+        "uptime_minutes": int((now - STARTED_AT).total_seconds() // 60),
+        "line_token": line_token,
+        "config_present": config,
+        "errors_24h": errors_24h,
+        "last_error_at": _iso(last_error["at"]),
+        "last_error_message": last_error["message"],
+        "last_morning_report_at": _iso(last_mr["at"]),
+        "last_morning_report_result": last_mr["result"],
+        "last_line_message_at": _iso(last_msg),
+        "note": "記録はメモリ上のため、再起動やスリープ復帰で started_at 以降の分だけになります",
+    })
 
 
 if __name__ == "__main__":
